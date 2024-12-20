@@ -126,16 +126,85 @@ class BookAnalyzer:
         return None, None, None
 
     def determine_difficulty(self, book: Book) -> str:
-        """Determine book difficulty based on title and content."""
+        """Determine book difficulty using multiple factors."""
+        score = 0.0
+        
+        # Content complexity indicators
+        complexity_indicators = {
+            "easy": [
+                r"beginner|basic|introduction|primer",
+                r"getting.?started|learn|simple",
+                r"fundamentals|basics|essential",
+            ],
+            "moderate": [
+                r"intermediate|practical|handbook",
+                r"guide|development|implementation",
+                r"cookbook|patterns|practices",
+            ],
+            "hard": [
+                r"advanced|mastering|complete",
+                r"architecture|design|principles",
+                r"performance|optimization",
+            ],
+            "extreme": [
+                r"theoretical|theory|academic",
+                r"formal.?methods|computation",
+                r"distributed|concurrent|parallel",
+            ]
+        }
+        
+        # Check title and content for complexity indicators
         title_lower = book.title.lower()
-
-        for level, patterns in self.difficulty_indicators.items():
+        for level, patterns in complexity_indicators.items():
             for pattern in patterns:
-                if re.search(pattern, title_lower, re.IGNORECASE):
-                    return level
-
-        # Default to moderate if no match
-        return "moderate"
+                if re.search(pattern, title_lower):
+                    score += {
+                        "easy": -2,
+                        "moderate": 0,
+                        "hard": 2,
+                        "extreme": 4
+                    }[level]
+                    break
+        
+        # Topic-based complexity
+        topic_complexity = {
+            "Computer Science": {
+                "Theory": 3,
+                "Algorithms": 2,
+                "Data Structures": 2,
+                "Compilers": 3,
+                "Operating Systems": 2
+            },
+            "Artificial Intelligence": {
+                "Deep Learning": 3,
+                "Machine Learning": 2,
+                "Statistics": 2
+            }
+            # ... more topic complexities
+        }
+        
+        # Adjust score based on topics
+        for topic, subtopic in book.topics:
+            if topic in topic_complexity and subtopic in topic_complexity[topic]:
+                score += topic_complexity[topic][subtopic]
+        
+        # Page count impact
+        if book.page_count > 600:
+            score += 2
+        elif book.page_count > 400:
+            score += 1
+        elif book.page_count < 200:
+            score -= 1
+        
+        # Map final score to difficulty levels
+        if score <= -2:
+            return "easy"
+        elif score <= 1:
+            return "moderate"
+        elif score <= 3:
+            return "hard"
+        else:
+            return "extreme"
 
     def determine_topics(self, book: Book) -> List[Tuple[str, str]]:
         """Port of legacy determine_book_topics."""
@@ -158,7 +227,6 @@ class BookAnalyzer:
     def analyze_books(self, books: List[Book]) -> Dict:
         """Analyze book collection using parallel processing."""
         with mp.Pool(mp.cpu_count()) as pool:
-            # Process books in parallel
             process_func = partial(self._process_single_book)
             with tqdm(total=len(books), desc="Analyzing books") as pbar:
                 processed_books = []
@@ -167,32 +235,120 @@ class BookAnalyzer:
                         processed_books.append(result)
                         pbar.update(1)
 
-        # Generate analysis
+        # Generate analysis with enhanced summary
         analysis = {
             "summary": {
+                # Basic stats
                 "total_books": len(processed_books),
-                "total_size_bytes": sum(
-                    book.size_bytes for book in processed_books
-                ),
+                "total_size_bytes": sum(book.size_bytes for book in processed_books),
                 "total_pages": sum(book.page_count for book in processed_books),
-                "average_pages": (
-                    round(
-                        sum(book.page_count for book in processed_books)
-                        / len(processed_books)
-                    )
-                    if processed_books
-                    else 0
-                ),
-                "unique_authors": len(
-                    {book.author for book in processed_books if book.author}
-                ),
+                "average_pages": round(sum(book.page_count for book in processed_books) / len(processed_books)) if processed_books else 0,
+                "unique_authors": len({book.author for book in processed_books if book.author}),
                 "years_range": self._get_years_range(processed_books),
+                
+                # Ratings distribution
+                "ratings": {
+                    "average": round(sum(book.rating for book in processed_books) / len(processed_books), 1),
+                    "distribution": self._get_distribution([book.rating for book in processed_books]),
+                    "by_value": {
+                        "excellent (9-10)": len([b for b in processed_books if b.rating >= 9]),
+                        "very_good (7-8)": len([b for b in processed_books if 7 <= b.rating <= 8]),
+                        "good (5-6)": len([b for b in processed_books if 5 <= b.rating <= 6]),
+                        "average (3-4)": len([b for b in processed_books if 3 <= b.rating <= 4]),
+                        "poor (1-2)": len([b for b in processed_books if b.rating <= 2])
+                    }
+                },
+                
+                # Difficulty distribution
+                "difficulties": {
+                    "distribution": self._get_distribution([book.difficulty for book in processed_books]),
+                    "by_level": {
+                        "easy": len([b for b in processed_books if b.difficulty == "easy"]),
+                        "moderate": len([b for b in processed_books if b.difficulty == "moderate"]),
+                        "hard": len([b for b in processed_books if b.difficulty == "hard"]),
+                        "extreme": len([b for b in processed_books if b.difficulty == "extreme"])
+                    }
+                },
+                
+                # Topics summary
+                "topics": self._summarize_topics(processed_books)
             },
-            "by_topic": self._group_by_topic(processed_books),
-            "books": [self._book_to_dict(book) for book in processed_books],
+            "books": [self._book_to_dict(book) for book in processed_books]
         }
 
         return analysis
+
+    def _get_distribution(self, values: List[any]) -> Dict:
+        """Calculate distribution of values."""
+        if not values:
+            return {}
+        
+        from collections import Counter
+        counts = Counter(values)
+        total = len(values)
+        
+        return {
+            str(key): {
+                "count": count,
+                "percentage": round(count / total * 100, 1)
+            }
+            for key, count in counts.items()
+        }
+
+    def _summarize_topics(self, books: List[Book]) -> Dict:
+        """Create summary of topics and subtopics."""
+        topic_summary = {}
+        
+        # Count books per topic and subtopic
+        for book in books:
+            for topic, subtopic in book.topics:
+                if topic not in topic_summary:
+                    topic_summary[topic] = {
+                        "total_books": 0,
+                        "subtopics": {},
+                        "average_rating": 0,
+                        "books_by_difficulty": {
+                            "easy": 0,
+                            "moderate": 0,
+                            "hard": 0,
+                            "extreme": 0
+                        }
+                    }
+                
+                topic_data = topic_summary[topic]
+                topic_data["total_books"] += 1
+                topic_data["books_by_difficulty"][book.difficulty] += 1
+                
+                if subtopic not in topic_data["subtopics"]:
+                    topic_data["subtopics"][subtopic] = {
+                        "total_books": 0,
+                        "average_rating": 0,
+                        "books_by_difficulty": {
+                            "easy": 0,
+                            "moderate": 0,
+                            "hard": 0,
+                            "extreme": 0
+                        }
+                    }
+                
+                subtopic_data = topic_data["subtopics"][subtopic]
+                subtopic_data["total_books"] += 1
+                subtopic_data["books_by_difficulty"][book.difficulty] += 1
+        
+        # Calculate averages
+        for topic, topic_data in topic_summary.items():
+            topic_books = [b for b in books if topic in [t[0] for t in b.topics]]
+            topic_data["average_rating"] = round(
+                sum(b.rating for b in topic_books) / len(topic_books), 1
+            ) if topic_books else 0
+            
+            for subtopic, subtopic_data in topic_data["subtopics"].items():
+                subtopic_books = [b for b in books if (topic, subtopic) in b.topics]
+                subtopic_data["average_rating"] = round(
+                    sum(b.rating for b in subtopic_books) / len(subtopic_books), 1
+                ) if subtopic_books else 0
+        
+        return topic_summary
 
     def _process_single_book(self, book: Book) -> Book:
         """Process a single book with all analysis steps."""

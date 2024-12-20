@@ -38,7 +38,6 @@ ENV/
 logs/
 
 # Project specific
-library_analysis.json
 organized/
 *.pdf
 analysis/

@@ -8,7 +8,7 @@ logging:
 
 # Directory paths
 directories:
-  input: /home/dima/Books/Algorithms # Directory containing PDF files to organize
+  input: /home/dima/BooksSample # Directory containing PDF files to organize
   output: /home/dima/Books/organized # Directory for organized files (if reorganize is enabled)
   analysis: ./analysis # Directory for analysis output (relative to where make is run)
 
