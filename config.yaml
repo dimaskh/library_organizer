@@ -2,34 +2,34 @@
 
 # Logging configuration
 logging:
-  level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO # DEBUG, INFO, WARNING, ERROR, CRITICAL
   file: library_organizer.log
   format: "%(asctime)s - %(levelname)s - %(message)s"
 
 # Directory paths
 directories:
-  input: /home/dima/Books  # Directory containing PDF files to organize
-  output: /home/dima/Books/organized  # Directory for organized files (if reorganize is enabled)
-  analysis: /home/dima/Books  # Directory for analysis output
+  input: /home/dima/Books/Algorithms # Directory containing PDF files to organize
+  output: /home/dima/Books/organized # Directory for organized files (if reorganize is enabled)
+  analysis: ./analysis # Directory for analysis output (relative to where make is run)
 
 # File patterns
 files:
-  include: ["*.pdf"]  # File patterns to include
-  exclude: []  # File patterns to exclude
+  include: ["*.pdf"] # File patterns to include
+  exclude: [] # File patterns to exclude
 
 # Processing options
 processing:
-  parallel: true  # Use parallel processing
-  num_cores: -1  # Number of cores to use (-1 for all available)
-  batch_size: 100  # Number of files to process in each batch
+  parallel: true # Use parallel processing
+  num_cores: -1 # Number of cores to use (-1 for all available)
+  batch_size: 100 # Number of files to process in each batch
 
 # Analysis options
 analysis:
-  save_json: true  # Save analysis results to JSON
-  json_file: library_analysis.json  # Name of the JSON output file
+  save_json: true # Save analysis results to JSON
+  json_file: analysis/library_analysis.json # Name of the JSON output file
 
 # Organization options
 organization:
-  dry_run: true  # Run without making changes
-  create_symlinks: false  # Create symlinks instead of moving files
-  preserve_original: true  # Keep original files when organizing
+  dry_run: true # Run without making changes
+  create_symlinks: false # Create symlinks instead of moving files
+  preserve_original: true # Keep original files when organizing

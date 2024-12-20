@@ -24,12 +24,14 @@ wheels/
 # Virtual Environment
 venv/
 ENV/
+.venv/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+.cursor/
 
 # Logs
 *.log
@@ -39,3 +41,7 @@ logs/
 library_analysis.json
 organized/
 *.pdf
+analysis/
+.coverage
+htmlcov/
+.pytest_cache/

@@ -1,0 +1,22 @@
+directories:
+  input: "books"
+  output: "organized"
+
+logging:
+  level: "INFO"
+  file: "library_organizer.log"
+
+topics:
+  programming: []
+  system_design: []
+  algorithms: []
+
+reading_speeds:
+  easy: 30
+  moderate: 25
+  hard: 20
+  extreme: 15
+
+advanced_topics: []
+intermediate_topics: []
+renowned_authors: []
