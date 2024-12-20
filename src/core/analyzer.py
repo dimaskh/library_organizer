@@ -4,10 +4,11 @@ import multiprocessing as mp
 import logging
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 from tqdm import tqdm
 from PyPDF2 import PdfReader
 from ..models.book import Book
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,9 @@ class BookAnalyzer:
         self.analysis_dir = Path(config["directories"]["analysis"])
         self.analysis_dir.mkdir(exist_ok=True)
 
+        # Load topic patterns first as they're used by other methods
+        self.topic_patterns = self._load_topic_patterns()
+        
         # Port difficulty indicators from legacy
         self.difficulty_indicators = {
             "easy": [
@@ -46,53 +50,111 @@ class BookAnalyzer:
             ],
         }
 
-        # Port topics structure from legacy
-        self.topics = {
-            "Programming Languages": {
-                "patterns": [
-                    r"python|java|c\+\+|javascript|ruby|go|rust|scala|kotlin|swift",
-                    r"programming.*(language|tutorial|guide)",
-                ],
-                "subtopics": {
-                    "Python": r"python",
-                    "Java": r"java\b|java\s|java$",
-                    "C/C++": r"c\+\+|\bc\b|c programming",
-                    "JavaScript": r"javascript|js|node|react|angular|vue",
-                    "Go": r"\bgo\b|golang",
-                    "Other": r".*",
-                },
-            },
-            # ... (add other topics from legacy)
-        }
+    def _clean_filename(self, filename: str) -> str:
+        """Clean up filename for better parsing."""
+        # Remove common path artifacts and normalize path separators
+        filename = str(filename).replace('\\', '/').split('/')[-1]
+        
+        # Remove file:/// and URL encoded characters
+        filename = re.sub(r'^file:///.*?/', '', filename)
+        filename = re.sub(r'%20', ' ', filename)
+        
+        # Remove common file prefixes
+        filename = re.sub(r'^(?:book_|ebook_|doc_)', '', filename, flags=re.I)
+        
+        # Remove common file extensions
+        filename = re.sub(r'\.(?:pdf|epub|mobi|dvi|djvu|html?|txt)$', '', filename, flags=re.I)
+        
+        # Replace underscores and multiple spaces
+        filename = filename.replace('_', ' ')
+        filename = re.sub(r'\s+', ' ', filename)
+        
+        return filename.strip()
 
-    def _extract_metadata_from_filename(
-        self, filepath: Path
-    ) -> Tuple[str, str, int]:
-        """Extract author, title and year from filename pattern."""
-        filename = filepath.stem  # Get filename without extension
-
-        # Common filename patterns:
-        # 1. "A. Author - Book Title [YYYY]"
-        # 2. "Author A. - Book Title [YYYY]"
-        # 3. "Book Title - Author A. [YYYY]"
-
+    def _extract_metadata_from_filename(self, filepath: Path) -> Tuple[str, str, int]:
+        """Extract and clean author, title and year from filename pattern."""
+        filename = self._clean_filename(str(filepath))
+        
+        # Common filename patterns (moved flags to pattern)
         patterns = [
-            r"^(?P<author>[\w\s\.,]+?)\s*-\s*(?P<title>.*?)\s*\[(?P<year>\d{4})\]",  # A. Author - Title [Year]
-            r"^(?P<title>.*?)\s*-\s*(?P<author>[\w\s\.,]+?)\s*\[(?P<year>\d{4})\]",  # Title - A. Author [Year]
-            r"^(?P<author>[\w\s\.,]+?)\s*-\s*(?P<title>.*?)(?:\s*\[(?P<year>\d{4})\])?$",  # A. Author - Title [optional Year]
+            r"(?i)^(?P<author>[\w\s\.,]+?)\s*-\s*(?P<title>.*?)\s*\[(?P<year>\d{4})\]",
+            r"(?i)^(?P<title>.*?)\s*-\s*(?P<author>[\w\s\.,]+?)\s*\[(?P<year>\d{4})\]",
+            r"(?i)^(?P<author>[\w\s\.,]+?)\s*-\s*(?P<title>.*?)(?:\s*\[(?P<year>\d{4})\])?$",
+            r"(?i)^(?P<title>.*?)(?:\s*\[(?P<year>\d{4})\])?$"
         ]
-
+        
         for pattern in patterns:
             match = re.match(pattern, filename)
             if match:
                 data = match.groupdict()
+                title = self._clean_title(data.get("title", filename))
                 return (
                     data.get("author", "").strip(),
-                    data.get("title", "").strip(),
-                    int(data["year"]) if data.get("year") else None,
+                    title,
+                    int(data["year"]) if data.get("year") else None
                 )
+        
+        # If no pattern matches, try to extract a sensible title
+        return None, self._clean_title(filename), None
 
-        return None, filename, None
+    def _clean_title(self, title: str) -> str:
+        """Clean and format book title."""
+        if not title:
+            return ""
+            
+        # Remove path components and clean up
+        title = self._clean_filename(title)
+        
+        # Remove common prefixes (moved flags to pattern)
+        prefixes_to_remove = [
+            r'(?i)^(?:a|the|an)\s+',
+            r'(?i)^(?:abook|ebook|book|document|manual|guide)[_\s.-]*'
+        ]
+        
+        for prefix in prefixes_to_remove:
+            title = re.sub(prefix, '', title)
+        
+        # Clean up edition/version information
+        title = re.sub(r'(?i)\s*[\[(](?:(?:\d+(?:st|nd|rd|th)?\s*)?edition|ver?\.?\s*\d+[\.\d]*|v\d+)[\])]', '', title)
+        
+        # Capitalize words properly
+        words = title.split()
+        if not words:
+            return ""
+        
+        # List of words that should not be capitalized
+        small_words = {'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'if', 'in', 
+                      'of', 'on', 'or', 'the', 'to', 'via', 'with'}
+        
+        # Capitalize first and last word always, and all other words except small words
+        result = []
+        for i, word in enumerate(words):
+            if i == 0 or i == len(words) - 1 or word.lower() not in small_words:
+                result.append(word.capitalize())
+            else:
+                result.append(word.lower())
+        
+        title = ' '.join(result)
+        
+        # Fix common abbreviations
+        abbreviations = {
+            r'(?i)\bAi\b': 'AI',
+            r'(?i)\bMl\b': 'ML',
+            r'(?i)\bNlp\b': 'NLP',
+            r'(?i)\bApi\b': 'API',
+            r'(?i)\bSql\b': 'SQL',
+            r'(?i)\bNosql\b': 'NoSQL',
+            r'(?i)\bJavascript\b': 'JavaScript',
+            r'(?i)\bTypescript\b': 'TypeScript',
+            r'(?i)\bPhp\b': 'PHP',
+            r'(?i)\bCss\b': 'CSS',
+            r'(?i)\bHtml\b': 'HTML'
+        }
+        
+        for pattern, replacement in abbreviations.items():
+            title = re.sub(pattern, replacement, title)
+        
+        return title.strip()
 
     def _extract_metadata_from_pdf(
         self, filepath: Path
@@ -207,22 +269,278 @@ class BookAnalyzer:
             return "extreme"
 
     def determine_topics(self, book: Book) -> List[Tuple[str, str]]:
-        """Port of legacy determine_book_topics."""
-        book_topics = []
-        title_lower = book.title.lower()
+        """Determine single most relevant topic and subtopic for a book."""
+        topic_scores = defaultdict(lambda: defaultdict(float))
+        
+        # Use loaded patterns instead of hardcoded ones
+        for topic, subtopics in self.topic_patterns.items():
+            for subtopic, patterns in subtopics.items():
+                if any(re.search(pattern, str(book.path).lower(), re.I) for pattern in patterns):
+                    topic_scores[topic][subtopic] += 2.0
 
-        for topic, topic_info in self.topics.items():
-            for pattern in topic_info["patterns"]:
-                if re.search(pattern, title_lower, re.IGNORECASE):
-                    subtopic = "Other"
-                    for sub, sub_pattern in topic_info["subtopics"].items():
-                        if re.search(sub_pattern, title_lower, re.IGNORECASE):
-                            subtopic = sub
-                            break
-                    book_topics.append((topic, subtopic))
+        # 2. Analyze title
+        title_str = book.title.lower()
+        for topic, subtopics in self.topic_patterns.items():
+            for subtopic, patterns in subtopics.items():
+                if any(re.search(pattern, title_str, re.I) for pattern in patterns):
+                    topic_scores[topic][subtopic] += 3.0
+
+        # 3. Deep content analysis
+        if hasattr(book, 'content') and book.content:
+            # Analyze first few chapters (first 20% of content)
+            content_sample = book.content[:int(len(book.content) * 0.2)]
+            
+            # Extract and analyze TOC
+            toc_match = re.search(r'(?:contents|table of contents).*?(?:chapter|section)', 
+                                content_sample, re.I | re.S)
+            if toc_match:
+                toc_text = toc_match.group(0)
+                for topic, subtopics in self.topic_patterns.items():
+                    for subtopic, patterns in subtopics.items():
+                        matches = sum(1 for pattern in patterns 
+                                   if re.search(pattern, toc_text, re.I))
+                        topic_scores[topic][subtopic] += matches * 0.5
+
+            # Analyze content patterns
+            for topic, subtopics in self.topic_patterns.items():
+                for subtopic, patterns in subtopics.items():
+                    matches = sum(len(re.findall(pattern, content_sample, re.I)) 
+                                for pattern in patterns)
+                    topic_scores[topic][subtopic] += matches * 0.1
+
+        # 4. Select best topic-subtopic pair
+        best_topic = None
+        best_subtopic = None
+        best_score = 0
+
+        for topic, subtopics in topic_scores.items():
+            for subtopic, score in subtopics.items():
+                if score > best_score:
+                    best_score = score
+                    best_topic = topic
+                    best_subtopic = subtopic
+
+        # 5. If no good match found (score too low), try additional analysis
+        if best_score < 1.0:
+            return self._determine_fallback_topic(book)
+
+        return [(best_topic, best_subtopic)]
+
+    def _determine_fallback_topic(self, book: Book) -> List[Tuple[str, str]]:
+        """Determine topic when no clear match is found."""
+        # Additional specific patterns for edge cases
+        specific_patterns = {
+            ("Computer Science", "Algorithms"): [
+                r"problem solving",
+                r"computational thinking",
+                r"algorithmic thinking",
+                r"competitive programming"
+            ],
+            ("Computer Science", "Data Structures"): [
+                r"data organization",
+                r"data management",
+                r"memory organization"
+            ],
+            ("Computer Science", "Computer Architecture"): [
+                r"computer organization",
+                r"digital design",
+                r"computer system"
+            ]
+            # ... add more specific patterns
+        }
+
+        # Try specific patterns
+        for (topic, subtopic), patterns in specific_patterns.items():
+            if any(re.search(pattern, book.title, re.I) for pattern in patterns):
+                return [(topic, subtopic)]
+
+        # If still no match, use directory structure as last resort
+        path_parts = str(book.path).lower().split('/')
+        for part in path_parts:
+            if "algorithm" in part:
+                return [("Computer Science", "Algorithms")]
+            if "data" in part and "struct" in part:
+                return [("Computer Science", "Data Structures")]
+            if "arch" in part or "system" in part:
+                return [("Computer Science", "Computer Architecture")]
+            # ... add more specific mappings
+
+        # Absolute last resort - analyze title words
+        title_words = set(re.findall(r'\w+', book.title.lower()))
+        if any(word in title_words for word in ["algorithm", "computational"]):
+            return [("Computer Science", "Algorithms")]
+        if any(word in title_words for word in ["data", "structure"]):
+            return [("Computer Science", "Data Structures")]
+        
+        # If everything fails, return based on directory structure
+        return [("Computer Science", "Theory")]  # Better than "General"
+
+    def _extract_toc_keywords(self, book: Book) -> Set[str]:
+        """Extract keywords from table of contents."""
+        keywords = set()
+        
+        if hasattr(book, 'content'):
+            # Common TOC patterns
+            toc_patterns = [
+                r"(?:Table of )?Contents?[:|\n]+((?:(?:\d+\.)*\d+\s+[^\n]+\n)+)",
+                r"(?:Chapter|Section)\s+\d+[.:]\s*([^\n]+)",
+                r"^\d+\.\d*\s+([^\n]+)",  # Numbered sections
+            ]
+            
+            for pattern in toc_patterns:
+                matches = re.finditer(pattern, book.content, re.MULTILINE | re.IGNORECASE)
+                for match in matches:
+                    # Clean and extract meaningful terms
+                    terms = re.findall(r'\b\w+(?:\s+\w+){0,3}\b', match.group(1))
+                    keywords.update(terms)
+        
+        return keywords
+
+    def _tokenize_content(self, content: str) -> List[str]:
+        """Tokenize and clean content."""
+        # Remove code blocks
+        content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+        # Remove punctuation and convert to lowercase
+        content = re.sub(r'[^\w\s]', ' ', content.lower())
+        # Split into words and remove common words
+        words = content.split()
+        stop_words = set(['the', 'and', 'or', 'in', 'to', 'a', 'of', 'for', 'is'])
+        return [w for w in words if w not in stop_words and len(w) > 2]
+
+    def _calculate_word_frequencies(self, words: List[str]) -> Dict[str, int]:
+        """Calculate word frequencies with technical term bias."""
+        freq = {}
+        for word in words:
+            freq[word] = freq.get(word, 0) + 1
+        
+        # Apply technical term bias
+        technical_patterns = [
+            r'\w+(?:ing|tion|ment|ity)\b',  # Technical suffixes
+            r'[A-Z][a-z]+(?:[A-Z][a-z]+)+',  # CamelCase
+            r'\w+(?:\_\w+)+',  # snake_case
+            r'\b[A-Z]+\b',     # UPPERCASE terms
+        ]
+        
+        for word in list(freq.keys()):
+            for pattern in technical_patterns:
+                if re.match(pattern, word):
+                    freq[word] *= 1.5  # Boost technical terms
                     break
+        
+        return freq
 
-        return book_topics or [("Uncategorized", "General")]
+    def _identify_technical_terms(self, word_freq: Dict[str, int]) -> Dict[str, float]:
+        """Identify technical terms and their importance."""
+        technical_terms = {}
+        
+        # Technical term indicators
+        indicators = {
+            'algorithm': 2.0,
+            'framework': 1.8,
+            'protocol': 1.8,
+            'database': 1.7,
+            'pattern': 1.6,
+            'architecture': 1.7,
+            'interface': 1.5,
+            'implementation': 1.6,
+            'optimization': 1.8,
+            'security': 1.7,
+        }
+        
+        for word, freq in word_freq.items():
+            # Check for compound technical terms
+            compounds = self._find_compound_terms(word, word_freq)
+            for compound in compounds:
+                for indicator, multiplier in indicators.items():
+                    if indicator in compound.lower():
+                        technical_terms[compound] = freq * multiplier
+                        break
+        
+        return technical_terms
+
+    def _extract_code_blocks(self, content: str) -> List[str]:
+        """Extract code blocks from content."""
+        code_blocks = []
+        
+        # Common code block patterns
+        patterns = [
+            r'```(?:\w+)?\n(.*?)\n```',  # Markdown code blocks
+            r'(?s)<code>(.*?)</code>',    # HTML code tags
+            r'(?m)^\s{4}.*$',             # Indented code blocks
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, content, re.DOTALL)
+            code_blocks.extend(match.group(1) for match in matches)
+        
+        return code_blocks
+
+    def _analyze_code_languages(self, code_blocks: List[str]) -> Dict[str, float]:
+        """Analyze programming languages in code blocks."""
+        lang_scores = {}
+        
+        # Language indicators
+        lang_patterns = {
+            'python': [r'def\s+\w+\s*\(', r'import\s+\w+', r'class\s+\w+:'],
+            'java': [r'public\s+class', r'void\s+\w+\s*\(', r'System\.out'],
+            'javascript': [r'function\s+\w+\s*\(', r'const\s+\w+\s*=', r'let\s+\w+'],
+            'cpp': [r'#include\s*<\w+>', r'std::', r'void\s+\w+\s*\('],
+            'go': [r'func\s+\w+\s*\(', r'package\s+main', r'import\s+"'],
+            'rust': [r'fn\s+\w+\s*\(', r'let\s+mut', r'use\s+std::'],
+        }
+        
+        for block in code_blocks:
+            for lang, patterns in lang_patterns.items():
+                score = 0
+                for pattern in patterns:
+                    if re.search(pattern, block):
+                        score += 1
+                if score > 0:
+                    lang_scores[lang] = lang_scores.get(lang, 0) + score
+        
+        return lang_scores
+
+    def _analyze_filename(self, book: Book) -> List[Tuple[str, str]]:
+        """Analyze filename and path for topic hints."""
+        topics = []
+        path_parts = Path(book.path).parts
+        
+        # 1. Directory Structure Analysis
+        dir_topics = self._analyze_directory_structure(path_parts)
+        if dir_topics:
+            topics.extend(dir_topics)
+        
+        # 2. Filename Analysis
+        filename = Path(book.path).stem.lower()
+        filename = re.sub(r'\[\d{4}\]', '', filename)
+        filename = re.sub(r'[-_\.]', ' ', filename)
+        
+        terms = re.findall(r'\b\w+(?:\s+\w+){0,3}\b', filename)
+        
+        # Use topic_patterns instead of self.topics
+        for term in terms:
+            for topic, subtopics in self.topic_patterns.items():
+                for subtopic, patterns in subtopics.items():
+                    if any(re.search(pattern, term, re.IGNORECASE) for pattern in patterns):
+                        topics.append((topic, subtopic))
+        
+        return list(set(topics))
+
+    def _analyze_directory_structure(self, path_parts: Tuple[str]) -> List[Tuple[str, str]]:
+        """Analyze directory structure for topic hints."""
+        topics = []
+        path_parts = [p.lower() for p in path_parts]
+        
+        for part in path_parts:
+            part = re.sub(r'[-_\.]', ' ', part)
+            
+            # Use topic_patterns instead of self.topics
+            for topic, subtopics in self.topic_patterns.items():
+                for subtopic, patterns in subtopics.items():
+                    if any(re.search(pattern, part, re.IGNORECASE) for pattern in patterns):
+                        topics.append((topic, subtopic))
+        
+        return list(set(topics))
 
     def analyze_books(self, books: List[Book]) -> Dict:
         """Analyze book collection using parallel processing."""
@@ -235,39 +553,33 @@ class BookAnalyzer:
                         processed_books.append(result)
                         pbar.update(1)
 
-        # Generate analysis with enhanced summary
+        # Generate analysis with simplified difficulties
         analysis = {
             "summary": {
                 # Basic stats
                 "total_books": len(processed_books),
-                "total_size_bytes": sum(book.size_bytes for book in processed_books),
-                "total_pages": sum(book.page_count for book in processed_books),
                 "average_pages": round(sum(book.page_count for book in processed_books) / len(processed_books)) if processed_books else 0,
                 "unique_authors": len({book.author for book in processed_books if book.author}),
-                "years_range": self._get_years_range(processed_books),
-                
-                # Ratings distribution
-                "ratings": {
-                    "average": round(sum(book.rating for book in processed_books) / len(processed_books), 1),
-                    "distribution": self._get_distribution([book.rating for book in processed_books]),
-                    "by_value": {
-                        "excellent (9-10)": len([b for b in processed_books if b.rating >= 9]),
-                        "very_good (7-8)": len([b for b in processed_books if 7 <= b.rating <= 8]),
-                        "good (5-6)": len([b for b in processed_books if 5 <= b.rating <= 6]),
-                        "average (3-4)": len([b for b in processed_books if 3 <= b.rating <= 4]),
-                        "poor (1-2)": len([b for b in processed_books if b.rating <= 2])
-                    }
+                "years_range": {
+                    "min": min(book.year for book in processed_books if book.year),
+                    "max": max(book.year for book in processed_books if book.year)
                 },
                 
-                # Difficulty distribution
+                # Ratings categories
+                "ratings": {
+                    "excellent (9-10)": len([b for b in processed_books if b.rating >= 9]),
+                    "very_good (7-8)": len([b for b in processed_books if 7 <= b.rating <= 8]),
+                    "good (5-6)": len([b for b in processed_books if 5 <= b.rating <= 6]),
+                    "average (3-4)": len([b for b in processed_books if 3 <= b.rating <= 4]),
+                    "poor (1-2)": len([b for b in processed_books if b.rating <= 2])
+                },
+                
+                # Simplified difficulties
                 "difficulties": {
-                    "distribution": self._get_distribution([book.difficulty for book in processed_books]),
-                    "by_level": {
-                        "easy": len([b for b in processed_books if b.difficulty == "easy"]),
-                        "moderate": len([b for b in processed_books if b.difficulty == "moderate"]),
-                        "hard": len([b for b in processed_books if b.difficulty == "hard"]),
-                        "extreme": len([b for b in processed_books if b.difficulty == "extreme"])
-                    }
+                    "easy": len([b for b in processed_books if b.difficulty == "easy"]),
+                    "moderate": len([b for b in processed_books if b.difficulty == "moderate"]),
+                    "hard": len([b for b in processed_books if b.difficulty == "hard"]),
+                    "extreme": len([b for b in processed_books if b.difficulty == "extreme"])
                 },
                 
                 # Topics summary
@@ -296,59 +608,22 @@ class BookAnalyzer:
         }
 
     def _summarize_topics(self, books: List[Book]) -> Dict:
-        """Create summary of topics and subtopics."""
-        topic_summary = {}
+        """Generate topic statistics with book counts."""
+        topic_counts = defaultdict(lambda: {"total": 0, "subtopics": defaultdict(int)})
         
-        # Count books per topic and subtopic
         for book in books:
             for topic, subtopic in book.topics:
-                if topic not in topic_summary:
-                    topic_summary[topic] = {
-                        "total_books": 0,
-                        "subtopics": {},
-                        "average_rating": 0,
-                        "books_by_difficulty": {
-                            "easy": 0,
-                            "moderate": 0,
-                            "hard": 0,
-                            "extreme": 0
-                        }
-                    }
-                
-                topic_data = topic_summary[topic]
-                topic_data["total_books"] += 1
-                topic_data["books_by_difficulty"][book.difficulty] += 1
-                
-                if subtopic not in topic_data["subtopics"]:
-                    topic_data["subtopics"][subtopic] = {
-                        "total_books": 0,
-                        "average_rating": 0,
-                        "books_by_difficulty": {
-                            "easy": 0,
-                            "moderate": 0,
-                            "hard": 0,
-                            "extreme": 0
-                        }
-                    }
-                
-                subtopic_data = topic_data["subtopics"][subtopic]
-                subtopic_data["total_books"] += 1
-                subtopic_data["books_by_difficulty"][book.difficulty] += 1
+                topic_counts[topic]["total"] += 1
+                topic_counts[topic]["subtopics"][subtopic] += 1
         
-        # Calculate averages
-        for topic, topic_data in topic_summary.items():
-            topic_books = [b for b in books if topic in [t[0] for t in b.topics]]
-            topic_data["average_rating"] = round(
-                sum(b.rating for b in topic_books) / len(topic_books), 1
-            ) if topic_books else 0
-            
-            for subtopic, subtopic_data in topic_data["subtopics"].items():
-                subtopic_books = [b for b in books if (topic, subtopic) in b.topics]
-                subtopic_data["average_rating"] = round(
-                    sum(b.rating for b in subtopic_books) / len(subtopic_books), 1
-                ) if subtopic_books else 0
-        
-        return topic_summary
+        # Convert to regular dict for JSON serialization
+        return {
+            topic: {
+                "total_books": stats["total"],
+                "subtopics": dict(stats["subtopics"])
+            }
+            for topic, stats in topic_counts.items()
+        }
 
     def _process_single_book(self, book: Book) -> Book:
         """Process a single book with all analysis steps."""
@@ -442,43 +717,179 @@ class BookAnalyzer:
 
         return topic_groups
 
-    def _rate_book(self, book: Book) -> int:
-        """Calculate book rating based on topics and difficulty."""
-        base_rating = 5  # Default rating
-
-        # Value multipliers based on topic categories
-        topic_value = {
-            "must_read": 2.0,
-            "highly_valuable": 1.5,
-            "career_growth": 1.2,
-            "general": 1.0,
+    def _rate_book(self, book: Book) -> float:
+        """Calculate book rating with decimal precision (1.0-10.0)."""
+        base_rating = 6.0  # Start at "good" level
+        score = 0.0
+        
+        # Quality indicators with adjusted weights
+        indicators = {
+            "recency": self._calculate_recency_score(book),
+            "comprehensiveness": self._calculate_comprehensiveness_score(book),
+            "authority": self._calculate_authority_score(book),
+            "technical_depth": self._calculate_technical_depth_score(book),
+            "practical_value": self._calculate_practical_value_score(book)
         }
-
-        # Extract topics from title and content
-        book_topics = self._extract_topics(book)
-
-        # Calculate rating based on topics
-        if book_topics:
-            # Get highest value multiplier from found topics
-            max_multiplier = max(
-                topic_value.get(topic, 1.0) for topic in book_topics
-            )
-            base_rating *= max_multiplier
-
-        # Adjust rating based on difficulty
-        difficulty_adjustments = {
-            "easy": -0.5,  # Might be too basic
-            "moderate": 0,  # No adjustment
-            "hard": 0.5,  # More valuable for career growth
-            "extreme": 1.0,  # Highly valuable for deep understanding
+        
+        # Adjusted weights (total = 1.0)
+        weights = {
+            "recency": 0.15,          # Less weight on recency
+            "comprehensiveness": 0.25, # More weight on completeness
+            "authority": 0.20,         # Publisher/author reputation
+            "technical_depth": 0.25,   # More weight on depth
+            "practical_value": 0.15    # Practical examples and exercises
         }
+        
+        # Calculate weighted score
+        for indicator, weight in weights.items():
+            score += indicators[indicator] * weight
+            
+        # Adjust base rating by score with reduced range
+        final_rating = base_rating + (score * 2.0)  # Scale to +/- 2 points
+        
+        # Normalize to 1.0-10.0 scale with one decimal point
+        return round(max(1.0, min(10.0, final_rating)), 1)
 
-        base_rating += difficulty_adjustments.get(book.difficulty, 0)
+    def _calculate_recency_score(self, book: Book) -> float:
+        """Calculate score based on book recency."""
+        if not book.year:
+            return 0.0
+            
+        current_year = 2024
+        age = current_year - book.year
+        
+        if age <= 1:
+            return 1.0    # Very recent
+        elif age <= 3:
+            return 0.8    # Recent
+        elif age <= 5:
+            return 0.6    # Still relevant
+        elif age <= 7:
+            return 0.4    # Slightly dated
+        elif age <= 10:
+            return 0.2    # Dated
+        else:
+            return 0.0    # Old but might have fundamental value
 
-        # Normalize rating to 1-10 scale
-        final_rating = min(max(round(base_rating), 1), 10)
+    def _calculate_comprehensiveness_score(self, book: Book) -> float:
+        """Calculate score based on book comprehensiveness."""
+        score = 0.0
+        
+        # Page count evaluation with adjusted thresholds
+        if book.page_count:
+            if book.page_count > 600:
+                score += 1.0    # Very comprehensive
+            elif book.page_count > 400:
+                score += 0.8    # Comprehensive
+            elif book.page_count > 300:
+                score += 0.6    # Adequate
+            elif book.page_count > 200:
+                score += 0.4    # Basic coverage
+            elif book.page_count > 100:
+                score += 0.2    # Brief
+            else:
+                score += 0.0    # Very brief
+        
+        return score
 
-        return final_rating
+    def _calculate_authority_score(self, book: Book) -> float:
+        """Calculate score based on book and author authority."""
+        score = 0.0
+        
+        # Updated publisher scores
+        reputable_publishers = {
+            'oreilly': 0.9,      # Increased
+            'addison wesley': 0.9,# Increased
+            'manning': 0.8,       # Increased
+            'apress': 0.7,
+            'packt': 0.6,
+            'springer': 0.8,
+            'pearson': 0.7,
+            'microsoft press': 0.8,
+            'wiley': 0.7,
+            'mcgraw hill': 0.7,
+            'academic press': 0.8,
+            'cambridge': 0.9,
+            'mit press': 0.9
+        }
+        
+        if hasattr(book, 'publisher'):
+            publisher_lower = book.publisher.lower()
+            for pub, value in reputable_publishers.items():
+                if pub in publisher_lower:
+                    score += value
+                    break
+        
+        # Academic indicators remain the same
+        if hasattr(book, 'content') and book.content:
+            academic_indicators = [
+                r'\breference\b',
+                r'\btheorem\b',
+                r'\bproof\b',
+                r'\blemma\b',
+                r'\bcitation[s]?\b',
+                r'\breferences\b',
+                r'\bbibliography\b'
+            ]
+            matches = sum(1 for pattern in academic_indicators 
+                        if re.search(pattern, book.content, re.IGNORECASE))
+            score += min(0.5, matches * 0.1)
+        
+        return min(1.0, score)
+
+    def _calculate_technical_depth_score(self, book: Book) -> float:
+        """Calculate score based on technical depth."""
+        score = 0.0
+        
+        # Difficulty-based scoring
+        difficulty_scores = {
+            "beginner": -0.3,
+            "intermediate": 0.0,
+            "advanced": 0.4,
+            "expert": 0.7
+        }
+        score += difficulty_scores.get(book.difficulty, 0.0)
+        
+        # Check for technical indicators in content
+        if hasattr(book, 'content') and book.content:
+            technical_indicators = [
+                (r'\balgorithm\b', 0.2),
+                (r'\bcomplexity\b', 0.2),
+                (r'\bimplementation\b', 0.1),
+                (r'\barchitecture\b', 0.2),
+                (r'code\s+example', 0.1),
+                (r'\bdesign\s+pattern', 0.2),
+                (r'\bperformance\b', 0.1),
+                (r'\boptimization\b', 0.2)
+            ]
+            
+            for pattern, value in technical_indicators:
+                if re.search(pattern, book.content, re.IGNORECASE):
+                    score += value
+        
+        return min(1.0, score)  # Cap at 1.0
+
+    def _calculate_practical_value_score(self, book: Book) -> float:
+        """Calculate score based on practical value."""
+        score = 0.0
+        
+        if hasattr(book, 'content') and book.content:
+            practical_indicators = [
+                (r'(?:^|\n)(?:def|class|function)', 0.2),  # Code blocks
+                (r'(?:^|\n)(?:var|let|const)', 0.2),  # Variables
+                (r'example[s]?\s+\d+', 0.1),  # Numbered examples
+                (r'exercise[s]?\s+\d+', 0.2),  # Exercises
+                (r'practice[s]?\b', 0.1),
+                (r'tutorial[s]?\b', 0.1),
+                (r'workshop[s]?\b', 0.1),
+                (r'hands[-\s]on', 0.2)
+            ]
+            
+            for pattern, value in practical_indicators:
+                if re.search(pattern, book.content, re.IGNORECASE):
+                    score += value
+        
+        return min(1.0, score)  # Cap at 1.0
 
     def _extract_topics(self, book: Book) -> List[str]:
         """Extract high-value topics from book title and content."""
@@ -533,3 +944,13 @@ class BookAnalyzer:
         """Analyze books and save results to JSON file."""
         analysis = self.analyze_books(books)
         self.save_analysis(analysis)
+
+    def _load_topic_patterns(self) -> dict:
+        """Load topic patterns from JSON file."""
+        patterns_path = Path(__file__).parent / "patterns" / "topic_patterns.json"
+        try:
+            with open(patterns_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load topic patterns: {e}")
+            return {}

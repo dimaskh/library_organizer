@@ -1,0 +1,230 @@
+{
+  "Computer Science": {
+    "Algorithms": [
+      "algorithm(?:s|ic)",
+      "computational",
+      "complexity",
+      "optimization",
+      "sorting",
+      "searching",
+      "dynamic programming",
+      "greedy algorithm",
+      "problem solving",
+      "competitive programming"
+    ],
+    "Data Structures": [
+      "data structure",
+      "tree(?:s)?",
+      "graph(?:s)?",
+      "hash(?:ing|table|map)",
+      "linked list",
+      "queue",
+      "stack",
+      "heap",
+      "binary(?:\\s+search)?\\s+tree"
+    ],
+    "Computer Architecture": [
+      "computer architecture",
+      "processor",
+      "memory system",
+      "cache",
+      "pipeline",
+      "assembly",
+      "hardware",
+      "digital design",
+      "computer organization"
+    ],
+    "Compilers": [
+      "compiler(?:s)?",
+      "programming language(?:s)?\\s+(?:design|theory)",
+      "parser",
+      "lexer",
+      "code generation",
+      "optimization",
+      "interpreter"
+    ],
+    "General": [
+      "computer science",
+      "programming",
+      "computation",
+      "software",
+      "fundamentals",
+      "principles",
+      "theory"
+    ]
+  },
+  "Programming Languages": {
+    "JavaScript": [
+      "javascript",
+      "js",
+      "node(?:\\.js)?",
+      "typescript",
+      "react",
+      "angular",
+      "vue"
+    ],
+    "Shell": [
+      "shell",
+      "bash",
+      "command\\s*line",
+      "terminal",
+      "unix",
+      "linux"
+    ],
+    "C/C++": [
+      "c\\+\\+",
+      "\\bc\\b",
+      "stl",
+      "boost",
+      "qt",
+      "cpp"
+    ],
+    "Java": [
+      "java\\b",
+      "spring",
+      "hibernate",
+      "kotlin",
+      "scala",
+      "jvm"
+    ]
+  },
+  "Artificial Intelligence": {
+    "Reinforcement Learning": [
+      "reinforcement\\s*learning",
+      "rl",
+      "q-learning",
+      "deep\\s*rl",
+      "policy\\s*gradient"
+    ],
+    "Computer Vision": [
+      "computer\\s*vision",
+      "image\\s*processing",
+      "opencv",
+      "object\\s*detection",
+      "image\\s*recognition"
+    ],
+    "Machine Learning": [
+      "machine\\s*learning",
+      "deep\\s*learning",
+      "neural\\s*network",
+      "ai",
+      "artificial\\s*intelligence"
+    ]
+  },
+  "Web Development": {
+    "Backend": [
+      "backend",
+      "server",
+      "api",
+      "rest",
+      "graphql",
+      "database"
+    ],
+    "Frontend": [
+      "frontend",
+      "html",
+      "css",
+      "dom",
+      "browser",
+      "javascript",
+      "web\\s*design"
+    ],
+    "Frameworks": [
+      "react",
+      "angular",
+      "vue",
+      "django",
+      "rails",
+      "spring",
+      "laravel"
+    ],
+    "Performance": [
+      "performance",
+      "optimization",
+      "caching",
+      "scaling",
+      "web\\s*performance"
+    ]
+  },
+  "Software Development": {
+    "Design Patterns": [
+      "design\\s*pattern",
+      "architecture",
+      "solid",
+      "object\\s*oriented",
+      "oop"
+    ],
+    "Documentation": [
+      "documentation",
+      "technical\\s*writing",
+      "spec(?:ification)?",
+      "api\\s*doc"
+    ],
+    "Clean Code": [
+      "clean\\s*code",
+      "refactoring",
+      "maintainable",
+      "code\\s*quality",
+      "best\\s*practices"
+    ]
+  },
+  "DevOps & Infrastructure": {
+    "Monitoring": [
+      "monitoring",
+      "observability",
+      "metrics",
+      "logging",
+      "alerting"
+    ],
+    "CI/CD": [
+      "ci(?:/|\\s*)cd",
+      "continuous\\s*(?:integration|delivery|deployment)",
+      "pipeline",
+      "automation",
+      "jenkins",
+      "gitlab"
+    ],
+    "Cloud Computing": [
+      "cloud",
+      "aws",
+      "azure",
+      "gcp",
+      "kubernetes",
+      "docker",
+      "openstack"
+    ]
+  },
+  "Security": {
+    "Cryptography": [
+      "cryptography",
+      "encryption",
+      "security",
+      "cipher",
+      "hash(?:ing)?",
+      "authentication",
+      "authorization"
+    ]
+  },
+  "Mobile Development": {
+    "Android": [
+      "android",
+      "kotlin",
+      "java\\s*mobile",
+      "android\\s*studio"
+    ],
+    "iOS": [
+      "ios",
+      "swift",
+      "objective-c",
+      "xcode",
+      "cocoa"
+    ],
+    "Mobile UI/UX": [
+      "mobile\\s*ui",
+      "ux",
+      "interface",
+      "mobile\\s*design",
+      "responsive"
+    ]
+  }
+}
